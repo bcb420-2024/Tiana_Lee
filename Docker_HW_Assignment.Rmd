@@ -1,0 +1,60 @@
+---
+title: "Docker HW Assignment"
+output: html_notebook
+---
+Required Packages 
+```{r}
+if(!require(dplyr)){
+    install.packages("dplyr")
+    library(dplyr)
+}
+```
+
+Create a 5 by 10 matrix of random integers
+
+```{r}
+df <- data.frame(matrix(c(sample(0:100, 50, replace = F)), byrow=FALSE, ncol = 10, 5))
+
+df
+```
+
+Define column names as cond1, cond2, cond3, cond4, cond5, ctrl1, ctrl2, ctrl3, ctrl4, ctrl5
+
+```{r}
+colnames(df) <- c("cond1", "cond2", "cond3", "cond4", "cond5", "ctrl1", "ctrl2", "ctrl3", "ctrl4", "ctrl5")
+
+df
+```
+
+define row names as gene1, gene2, gene3 ...
+```{r}
+rownames(df) <- c("gene1", "gene2", "gene3", "gene4", "gene5")
+
+df
+```
+
+Compute the fold change of each gene
+```{r}
+fold_change <- c()
+
+for(x in 1:length(rownames(df)))
+{
+  cond <- c()
+  ctrl <- c()
+  for(y in 1:(length(colnames(df))-1))
+  {
+   if (y <= 5)
+     cond <- c(cond, df[x, y])
+   else
+     ctrl <- c(ctrl, df[x, y])
+  }
+  
+  fold_change <- c(fold_change, (mean(cond)/mean(ctrl)))
+}
+
+df$foldchange <- c(fold_change)
+
+df
+```
+
+
