@@ -1,0 +1,300 @@
+---
+title: "Assignment 1.2"
+author: "Tiana Lee"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: paged
+---
+
+# All Packages Needed
+
+These are all the packages needed that were not started in Dockerfile
+```{r all packages needed}
+if (!requireNamespace("GEOquery", quietly = TRUE)) {
+  BiocManager::install("GEOquery")
+}
+
+library(GEOquery)
+
+if (!requireNamespace("dplyr", quietly = TRUE)) {
+  tidyr::install("dplyr")
+}
+
+library(dplyr)
+
+if(!requireNamespace("limma", quietly = TRUE)) {
+  install.packages("limma")
+}
+```
+
+# initialize variables
+
+We are starting with what the geo_id is and the extra information that is attached to the geo_id
+```{r initialize variables}
+geo_id <- "GSE242722"
+gse <- getGEO(geo_id, GSEMatrix=FALSE)
+
+gse@header$summary
+```
+# get expression data
+
+We first will download the expression data and make sure that it isnt downloaded multiple times. 
+```{r get expression data}
+geo_filename <- getGEOSuppFiles(geo_id, fetch_files = FALSE)
+
+geo_filename$fname
+data_filename <- geo_filename$fname[1]
+
+download_geofile <- file.path(getwd()) #download and stores files
+
+missing_files <- geo_filename$fname[!unlist(
+  lapply(geo_filename$fname, FUN=function(x){
+    file.exists(
+      file.path(download_geofile, geo_id, x))}))]
+
+# only one supplemental file
+```
+# Reading the data 
+
+We read and format the data. 
+```{r reading the data}
+some_data <- read.csv(file.path(download_geofile, geo_id, data_filename), 
+                       header = TRUE, 
+                       check.names = FALSE)
+
+dim(some_data)
+
+colnames(some_data)[1:14]
+
+pt1 <- data.frame(some_data$ID)
+pt2 <- data.frame(some_data[, 6:14])
+some_exp <- cbind(pt1, pt2)
+```
+
+# Collecting additional annotations
+
+This is where we get the additional gse information which it tells you the characteristics and titles of the samples used
+```{r collecting additional annotations}
+list_of_samples <- gse@gsms
+sample_type <- do.call(rbind,
+                       lapply(list_of_samples,
+                              FUN=function(x){
+                                c(x@header$title,
+                                  x@header$characteristics_ch1)
+                              }))
+sample_type
+```
+# Cleaning up descriptions
+
+Since the discriptions can be overwhelming and we are also not using all of the datasets, this is where we get rid of what we dont want 
+```{r cleaning up description}
+colnames(sample_type) <- c("title", "cell type","treatment given")
+
+sample_type[,1] <- gsub(sample_type[,1],
+                               pattern = "NHBE, ",
+                               replacement = "")
+sample_type[,2] <- gsub(sample_type[,2],
+                                   pattern = "cell type: ",
+                                   replacement = "")
+sample_type[,3] <- gsub(sample_type[,3],
+                                         pattern = "treatment: ",
+                                         replacement = "")
+
+sample_type <- as.data.frame(sample_type[1:8,])
+
+sample_type
+
+kableExtra::kable(sample_type[1:8,], format = "html")
+```
+# removing datasets that have weak or no expression and information 
+
+Since not all of the data is useful to us, we want to know what is expressing at an acceptable statical level. Additionally, our downstream analysis will be skewed if there is missing information since the script will not know what to do with it. 
+```{r removing datasets that have weak or no expression and information}
+# calculate the counts per million using the edgeR package function cpm
+cpms <- edgeR::cpm(some_exp[, 2:9])
+
+# now drop the genes with low counts, n = 2 since there are 2 replicates of each type of variant
+keep <- rowSums(cpms > 1) >= 2
+
+filtered_data <- some_exp[keep,]
+
+# number of unimportant genes dropped:
+num_removed <-  dim(some_exp)[1] - dim(filtered_data)[1]
+
+num_removed
+
+# get rid of all of the genes that are NA 
+clean_data <- dplyr::filter(filtered_data, !is.na(filtered_data$Gene.name))
+clean_data
+
+# get rid of all duplicated genes
+clean_data <- clean_data %>% dplyr::filter(duplicated(Gene.name) == FALSE)
+
+# percentage of missing genes
+(dim(clean_data)/dim(filtered_data)) * 100
+```
+# Mapping genes
+
+We map all the genes to make sure that the data looks how we want it to look and also it helps us know if any of the genes were duplicated. We see that there are 15170 genes that are still unique after all of the cleaning
+```{r mapping genes}
+mapped_genes <- data.frame(row.names = clean_data$Gene.name)
+
+mapped_genes <- cbind(mapped_genes,clean_data$NHBED1, clean_data$NHBED2, clean_data$NHBEP1, clean_data$NHBEP2, clean_data$NHBEU1, clean_data$NHBEU2, clean_data$NHBEU3, clean_data$NHBEU4)
+
+mapped_genes
+
+nrow(mapped_genes)
+```
+# Normalization
+
+We normalize so that we can compare genes to each other without worry about the different samples and preps. 
+```{r normalize data using TMM}
+clean_data_matrix <- as.matrix(mapped_genes)
+rownames(clean_data_matrix) <- rownames(mapped_genes)
+d = edgeR::DGEList(counts=clean_data_matrix)
+d = edgeR::calcNormFactors(d)
+normalized_counts <- edgeR::cpm(d)
+
+d
+```
+# Estimating Dispersion
+
+We estimate dispersion so that you can see how much deviation you have from the mean. This is used in negative binomial models where the probability is due to the no of failures. 
+```{r estimating dispersion}
+model_design <- model.matrix(~sample_type$title)
+d <- edgeR::estimateDisp(d, model_design)
+norm_counts <- edgeR::cpm(d)
+
+norm_counts[1:20, ]
+```
+# BOXPLOT
+
+## Unnormalized 
+reference: 4 [github wiki]
+```{r plotting the box plot: unnormalized}
+data2plot <- log2(edgeR::cpm(mapped_genes))
+boxplot(data2plot, xlab = "Samples", ylab = "log2 CPM",
+        las = 2, cex = 0.5, cex.lab = 0.5,
+        cex.axis = 0.5, main = "Original Counts")
+
+abline(h = median(apply(data2plot, 2, median)),
+       col = "red", 
+       lwd = 0.6,
+       lty = "dashed")
+```
+
+## Normalized 
+reference: 4 [github wiki]
+```{r plotting the box plot: normalized}
+norm_data2plot <- log2(norm_counts)
+boxplot(norm_data2plot, xlab = "Samples", ylab = "log2 CPM",
+        las = 2, cex = 0.5, cex.lab = 0.5,
+        cex.axis = 0.5, main = "normalized Counts")
+
+abline(h = median(apply(norm_data2plot, 2, median)),
+       col = "red", 
+       lwd = 0.6,
+       lty = "dashed")
+```
+
+# MEAN VARIANCE RELATIONSHIP
+
+reference: 4 [github wiki]
+```{r mean variance relationship}
+edgeR::plotMeanVar(d, show.raw.vars = TRUE,
+                   show.tagwise.vars = TRUE,
+                   NBline = TRUE,
+                   show.ave.raw.vars = TRUE,
+                   show.binned.common.disp.vars = TRUE)
+```
+# DENSITY PLOT
+
+## Unnormalized
+reference: 4 [github wiki]
+```{r density plot: unnormalized}
+counts_density <- apply(log2(edgeR::cpm(mapped_genes)), 
+                        2, 
+                        density)
+
+xlim <- 0; ylim <- 0
+for (i in 1:length(counts_density)) {
+  xlim <- range(c(xlim, counts_density[[i]]$x)); 
+  ylim <- range(c(ylim, counts_density[[i]]$y))
+}
+cols <- rainbow(length(counts_density))
+ltys <- rep(1, length(counts_density))
+
+#plotting first line
+plot(counts_density[[1]], xlim=xlim, ylim=ylim, type="n", 
+     ylab="Smoothing density of log2-CPM", main="", cex.lab = 0.85)
+
+#plotting rest of lines 
+for (i in 1:length(counts_density)) {
+  lines(counts_density[[i]], col=cols[i], lty=ltys[i])
+} 
+
+#creating legend
+legend("topright", colnames(data2plot),  
+       col=cols, lty=ltys, cex=0.75, 
+       border ="blue",  text.col = "purple", 
+       merge = TRUE, bg = "gray95")
+```
+
+## Normalized
+reference: 4 [github wiki]
+```{r density plot normalized} 
+norm_counts_density <- apply(log2(norm_counts), 2, density)
+
+xlim <- 0; ylim <- 0
+for (i in 1:length(norm_counts_density)) {
+  xlim <- range(c(xlim, norm_counts_density[[i]]$x)); 
+  ylim <- range(c(ylim, norm_counts_density[[i]]$y))
+}
+cols <- rainbow(length(norm_counts_density))
+ltys <- rep(1, length(norm_counts_density))
+
+#plotting the first line
+plot(norm_counts_density[[1]], xlim=xlim, ylim=ylim, type="n", 
+     ylab="Smoothing density of log2-CPM", main="", cex.lab = 0.85)
+
+#plotting rest of the lines
+for (i in 1:length(norm_counts_density)) {
+  lines(norm_counts_density[[i]], col=cols[i], lty=ltys[i])
+}
+
+legend("topright", colnames(data2plot),  
+       col=cols, lty=ltys, cex=0.75, 
+       border ="blue",  text.col = "purple", 
+       merge = TRUE, bg = "gray95")
+```
+
+# Interpreting and Documenting Data
+* is the dataset of interest to you? 
+**Significance of paper within [https://github.com/bcb420-2024/Tiana_Lee/wiki/3.1-Assignment-1#choosing-an-expression-data-set CHOOSING A DATASET]
+* What are the control and test conditions of the dataset?
+  * The control is the uninfected (NHBEU#) vs the test conditions of (NHBEP# OR NHBED#)
+* How many samples in each of the conditions of your dataset? 
+  * There are 2 samples of each of the test conditions and 4 of the uninfected conditions. 
+* Were there expression values that were not unique for specific genes? How did you handle these? 
+  * Yes, there were expression values that were not unique for a specific gene. We did this by [Chunk 7: removing datasets that have weak or no expression and information of RNotebook]
+* Were there expression values that could not be mapped to current HUGO symbols?
+  * No, there isn't any that we know about since the values were already mapped to HUGO symbols
+* Were there any outliers in your dataset? How were they handled in the originating paper? How many outliers were removed? 
+  * Yes, there were outliers in the dataset. It is not mentioned how they handled it in the originating paper. Therefore, we do not know how many outliers were removed.
+* How did you handle replicates?
+  * I handled replicates by treating them as their own set. Then, look at them to interpret the biological significance of the dataset.
+* What is the final coverage of your dataset? 
+  * The final coverage of the dataset is 15170
+
+All Conclusions and interpretations are additionally in the https://github.com/bcb420-2024/Tiana_Lee/wiki/3.1-Assignment-1 
+
+# Reference 
+1. Odak I, Riemann L, Sandrock I, Cossmann A, Ramos GM, Hammerschmidt SI, Ritter C, Friedrichsen M, Hassan A, Dopfer-Jablonka A, Stankov MV, Weskamm LM, Addo MM, Ravens I, Willenzon S, Schimrock A, Ristenpart J, Janssen A, Barros-Martins J, Hansen G, Falk C, Behrens GMN, Förster R. Systems biology analysis reveals distinct molecular signatures associated with immune responsiveness to the BNT162b COVID-19 vaccine. EBioMedicine. 2024 Jan;99:104947. doi: 10.1016/j.ebiom.2023.104947. Epub 2023 Dec 30. PMID: 38160529; PMCID: PMC10792461.
+2. Davis S, Meltzer P (2007). “GEOquery: a bridge between the Gene Expression Omnibus (GEO) and BioConductor.” Bioinformatics, 14, 1846–1847.
+3. Erickson R, Huang C, Allen C, Ireland J, Roth G, Zou Z, Lu J, Lafont BAP, Garza NL, Brumbaugh B, Zhao M, Suzuki M, Olano L, Brzostowski J, Fischer ER, Twigg HL 3rd, Johnson RF, Sun PD. SARS-CoV-2 infection of human lung epithelial cells induces TMPRSS-mediated acute fibrin deposition. Nat Commun. 2023 Oct 11;14(1):6380. doi: 10.1038/s41467-023-42140-6. PMID: 37821447; PMCID: PMC10567911.
+4. https://bcb420-2020.github.io/student_JoelleJee/A1.html
+5. Landau WM, Liu P. Dispersion estimation and its effect on test performance in RNA-seq data analysis: a simulation-based comparison of methods. PLoS One. 2013 Dec 9;8(12):e81415. doi: 10.1371/journal.pone.0081415. PMID: 24349066; PMCID: PMC3857202.
+
+All References are in https://github.com/bcb420-2024/Tiana_Lee/wiki/3.1-Assignment-1
