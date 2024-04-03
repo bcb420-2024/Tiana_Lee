@@ -1,0 +1,202 @@
+---
+title: "Assignment 3"
+author: "Tiana Lee"
+date: 12 Mar 2024
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: paged
+---
+**All Materials Needed**
+
+These are all the packages needed in order to run the rest of the code. 
+```{r all packages needed}
+if(!requireNamespace("fgsea", quietly = TRUE)){
+  tidyr::install("fgsea")
+}
+
+library(fgsea)
+
+if(!requireNamespace("GEOquery", quietly = TRUE)){
+  tidyr::install("GEOquery")
+}
+
+library(GEOquery)
+
+if(!requireNamespace("readr", quietly = TRUE)){
+  tidyr::install("readr")
+}
+
+library(readr)
+
+if(!requireNamespace("dplyr", quietly = TRUE)) {
+  tidyr::install("dplyr")
+}
+
+library(dplyr)
+
+if(!requireNamespace("knitr", quietly = TRUE)){
+  tidyr::install("knitr")
+}
+
+library(knitr)
+
+if(!requireNamespace("DESeq2", quietly = TRUE)) {
+  tidyr::install("DESeq2")
+}
+
+library(DESeq2)
+
+if(!requireNamespace("edgeR", quietly = TRUE)) {
+  tidyr::install("edgeR")
+}
+
+library(edgeR)
+
+if(!requireNamespace("ggplot2", quietly = TRUE)){
+  tidyr::install("ggplot2")
+}
+
+library(ggplot2)
+
+if(!requireNamespace("ComplexHeatmap", quietly = TRUE)){
+  tidyr::install("ComplexHeatmap")
+}
+
+library(ComplexHeatmap)
+
+if(!requireNamespace("circlize", quietly = TRUE)){
+  tidyr::install("circlize")
+}
+
+library(circlize)
+library(gprofiler2)
+```
+
+This is the raw dataset from the first 2 assignments. 
+
+```{r raw dataset}
+
+geo_id <- "GSE242722"
+gse <- getGEO(geo_id, GSEMatrix=FALSE)
+
+geo_filename <- getGEOSuppFiles(geo_id, fetch_files = FALSE)
+
+geo_filename$fname
+data_filename <- geo_filename$fname[1]
+
+download_geofile <- file.path(getwd()) #download and stores files
+
+```
+
+This is the dataset that was mapped and normalized from the first assignment [A1](https://github.com/bcb420-2024/Tiana_Lee/blob/main/A1_TianaLee.html). 
+
+*Background*
+
+Hospitalization rates have been a underlying problem with the COVID pandemic. This paper focused on the lung damage that patients get from severe covid cases. Looking into this was of interest to them since it would be able to allow them to suggest therapeutic intervention tactics that could possible work better than the current solutions. Although there are current solutions, they do not often work in these severe hospitalization cases which this paper tries to address why that might be the case by chasing a current hypothesis that the diseased lung might have problems regulating coagulation and thrombosis which were found in patient samples previously. To find their answers, they did proteomic and gene analysis on a few different cell types.
+
+From [A1](https://github.com/bcb420-2024/Tiana_Lee/blob/main/A1_TianaLee.html) we were able to normalize the dataset in the paper. To make analysis easier, one set of cell types were excluded from the analysis (NHBE was only used).
+
+From [A2](https://github.com/bcb420-2024/Tiana_Lee/blob/main/Assignment%202/A2_TianaLee.Rmd) we were able to perform a differential expression test and conduct an ORA test. This gave genes that were either up regulated or down regulated.
+
+This is the list of genes that were found using the ORA test.
+```{r ORA data}
+knit('A2_TianaLee.Rmd')
+```
+
+*Non-thresholded gene set enrichment analysis*
+Now, we will do the non-thresholded gene enrichment using GSEA.
+
+First we must download the geneset files and obtain our own dataset to gather a ranked list. The ranked list is used as a measure of a genes' differential expression compared to the rest of the data.
+```{r rankings}
+geneset_file <- "~/projects/gmt_files/Human_GO_AllPathways_noPFOCR_with_GO_iea_March_01_2024_symbol.gmt"
+
+diffexp_data <- tmp  #this is from Assignment 2
+
+ranked_list <- data.frame(GeneName = rownames(diffexp_data), 
+                          rank = -log(diffexp_data$PValue, base = 10) * sign(diffexp_data$logFC))
+
+ranked_list <- ranked_list[order(-ranked_list$rank),] #ordering the ranked list
+
+if(! file.exists("a3_ranked.rnk")){
+  write.table(ranked_list, "a3_ranked.rnk", quote=FALSE, sep='\t', row.names = FALSE)
+}
+```
+
+Now, we need to set a path and do the analysis. 
+```{r setting path}
+working_dir <- getwd() 
+gsea_jar <- file.path(working_dir, "GSEA_4.3.2/gsea-cli.sh")
+gsea_directory = ""
+
+analysis_name <- "no COVID infection vs COVID infection" 
+rnk_file <- "a3_ranked.rnk" # name of ranked file
+
+geneset <- gmtPathways(geneset_file)
+
+rankings <- ranked_list$rank
+  names(rankings) <- ranked_list$GeneName
+  
+  fgseaRes <- fgsea(pathways = geneset, 
+                    stats = rankings, 
+                    minSize  = 15,
+                    maxSize  = 200)
+
+format_fgsea_results <- function(current_fgsea_results, current_ranks) {
+  
+    calculated_rank_at_max <- apply(current_fgsea_results, 1, FUN = function(x) { 
+        max(which(names(current_ranks) %in% unlist(x[8])))
+    })
+
+    gsea_results <- cbind(current_fgsea_results$pathway,              current_fgsea_results$pathway,
+                      current_fgsea_results$pathway,
+                          current_fgsea_results$size,
+                          current_fgsea_results$ES,
+                          current_fgsea_results$NES,
+                          current_fgsea_results$pval,
+                          current_fgsea_results$padj,
+                          0,
+                          calculated_rank_at_max,
+                          apply(current_fgsea_results, 1, FUN = function(x) {
+                              paste(unlist(x[8]), collapse = ",")
+                          })) 
+    
+    colnames(gsea_results) <- c("name", "description", "GS DETAILS", "SIZE", 
+                                "ES", "NES", "pval", "padj", "FWER", 
+                                "Rank at Max", "leading edge genes")
+    
+    return(gsea_results)
+}
+
+top_pathways_pos <- format_fgsea_results(fgseaRes[NES > 0], rankings)
+top_pathways_neg <- format_fgsea_results(fgseaRes[NES < 0], rankings)
+
+write.table(top_pathways_pos, 
+            file = "gsea_report_covid.tsv", sep = "\t", 
+            row.names = FALSE,
+            quote = FALSE)
+
+write.table(top_pathways_neg, 
+            file = "gsea_report_nocovid.tsv", sep = "\t", 
+            row.names = FALSE,
+            quote = FALSE)
+
+```
+These parameters were used following the GSEA homework guide explanations. I also used the Bader Lab's geneset listed in the Assignment 3 folder. 
+
+Comparing these results to the previous assingment, what we see is that the 2 files have very similar overarching ideas when it comes to topics that come up very frequently but the order in which they come up is very different between the 2 assignments. 
+
+Now we have the files, we can visualize and analyze using Cytoscape.
+
+This file has 1808 nodes and 17138 edges. I used the FDR cut off as 0.1 and the default setting in this case. The visualization figure is in the Cytoscape Pre-manipulation.zip folder. 
+
+I used the autoannotate app and used the default settings to annotate the map. (can be seen in annotation settings.png)
+
+Within the clusters there are many genes that have to deal with signaling cascades and interactions that have to do with genomic transcription. There is also clusters that have to do with immunological signalling. This fits with the model since the data was taken from samples that have been infected with COVID-19 which means that the cells would be undergoing genomic replication of the viral genome since that is part of the viral life cycle. It also makes sense that the immunological pathways would be active since the host is probably trying to fight off the disease as well. What was interesting was how the cluster with rrna ribosomal degradation was so high. 
+
+This doesnt necessarily conclude what the paper concluded and looks a bit different from what I gathered through the previous assignment. I think that although this is more detailed than the previous assignments and that the clusters are more clearly labeled, I find it interesting how many clusters do not really relate to interferon responses and anti-viral responses. They mostly are targetted at the genomic replication and repair. I am not sure why this is but my best hypothesis would be that it is due to that taking part in lots of viral lifecycles since it is how they spread from person to person. This is evident by a paper by V’kovski et al. 
+
+References 
+[1] https://www.nature.com/articles/s41579-020-00468-6
+[2] 

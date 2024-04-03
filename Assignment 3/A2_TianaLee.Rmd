@@ -1,0 +1,302 @@
+---
+title: "Assignment 2"
+author: Tiana Lee 
+date: 12 Mar 2024
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: paged
+---
+
+**All Materials Needed**
+
+These are all the packages and data sets that are needed for this assignment. They will be installed if the packages are not present.
+
+```{r All Packages Needed}
+if(!requireNamespace("GEOquery", quietly = TRUE)){
+  tidyr::install("GEOquery")
+}
+
+library(GEOquery)
+
+if(!requireNamespace("readr", quietly = TRUE)){
+  tidyr::install("readr")
+}
+
+library(readr)
+
+if(!requireNamespace("dplyr", quietly = TRUE)) {
+  tidyr::install("dplyr")
+}
+
+library(dplyr)
+
+if(!requireNamespace("knitr", quietly = TRUE)){
+  tidyr::install("knitr")
+}
+
+library(knitr)
+
+if(!requireNamespace("DESeq2", quietly = TRUE)) {
+  tidyr::install("DESeq2")
+}
+
+library(DESeq2)
+
+if(!requireNamespace("edgeR", quietly = TRUE)) {
+  tidyr::install("edgeR")
+}
+
+library(edgeR)
+
+if(!requireNamespace("ggplot2", quietly = TRUE)){
+  tidyr::install("ggplot2")
+}
+
+library(ggplot2)
+
+if(!requireNamespace("ComplexHeatmap", quietly = TRUE)){
+  tidyr::install("ComplexHeatmap")
+}
+
+library(ComplexHeatmap)
+
+if(!requireNamespace("circlize", quietly = TRUE)){
+  tidyr::install("circlize")
+}
+
+library(circlize)
+library(gprofiler2)
+```
+
+This is the raw dataset. 
+
+```{r raw Dataset}
+geo_id <- "GSE242722"
+gse <- getGEO(geo_id, GSEMatrix=FALSE)
+
+geo_filename <- getGEOSuppFiles(geo_id, fetch_files = FALSE)
+
+geo_filename$fname
+data_filename <- geo_filename$fname[1]
+
+download_geofile <- file.path(getwd()) #download and stores files
+```
+
+This is the dataset that was mapped and normalized from the last assignment [A1](https://github.com/bcb420-2024/Tiana_Lee/blob/main/A1_TianaLee.html). 
+
+```{r Normalized dataset}
+norm_data <- read_rds("~/projects/normalized_counts.rds")
+norm_data <- DGEList(norm_data)
+
+norm_data
+```
+
+*Background*
+
+Hospitalization rates have been a underlying problem with the COVID pandemic. This paper focused on the lung damage that patients get from severe covid cases. Looking into this was of interest to them since it would be able to allow them to suggest therapeutic intervention tactics that could possible work better than the current solutions. Although there are current solutions, they do not often work in these severe hospitalization cases which this paper tries to address why that might be the case by chasing a current hypothesis that the diseased lung might have problems regulating coagulation and thrombosis which were found in patient samples previously. To find their answers, they did proteomic and gene analysis on a few different cell types.
+
+From [A1](https://github.com/bcb420-2024/Tiana_Lee/blob/main/A1_TianaLee.html) we were able to normalize the dataset in the paper. To make analysis easier, one set of cell types were excluded from the analysis (NHBE was only used).
+
+**Differential Expression Test**
+
+Calculating p-values for each of genes in the expression set. This is done to figure out which are statistically differentially expressed. 
+
+```{r p-value calculation}
+# form the groups 
+group <- factor(c(1,1,1,1,0,0,0,0))
+model_design <- model.matrix(~group)
+model_design
+
+dispersion <- estimateDisp(norm_data, model_design)
+
+fit <- glmFit(dispersion)
+
+diffexpr <- glmLRT(fit)
+
+pval <- topTags(diffexpr, sort.by = "PValue", n = nrow(norm_data))
+
+length(which(pval$table$PValue < 0.05))  #This is the number of differentially expressed values 
+
+length(which(pval$table$PValue < 0.0001))  #This is the number of differentially expressed values 
+```
+
+Table 1. Table of genes sorted in order of increasing p-values.
+
+Multiple hypothesis testing was done to correct p-values using the FDR values. 
+
+```{r Multiple Hypothesis Testing}
+length(which(pval$table$FDR < 0.05))  #This is the number of genes that passed the correction
+
+length(which(pval$table$FDR < 0.0001))  #This is the number of genes that passed the correction
+```
+
+*How many genes were significantly differentially expressed?*  
+10 genes were significantly expressed for a p value < 0.05 and 7 were significantly expressed for a p value < 0.0001.
+
+*What thresholds did you use and why?*
+I used a threshold of 0.05 since it seems to be the standard used throughout. I could also try setting is a lot smaller to mimick what the paper did at 0.0001 but I am not sure if this is the best course of action since they were looking at 2 different cell lines with 2 different control whereas I am only looking at 1 set of cell lines.
+
+*Which method did you use? And Why? How many genes passed correction?*
+I used the FDR value. This is because it typically gives you the ratio of false predictions over total predictions which indicates how many are truly null which will account for the type 1 error. 5 genes were significantly expressed for a FDR value < 0.05 and 0 were significantly expressed for a FDR value < 0.0001.
+
+Creating a volcano plot of differentially expressed genes. 
+
+```{r Volcano Plot}
+tmp <- pval$table
+tmp
+tab <- tmp[complete.cases(tmp), ]
+
+tab$diffexpressed <- "NO"
+tab$diffexpressed[tab$logFC > 0.6 & tab$PValue < 0.05] <- "UP"
+tab$diffexpressed[tab$logFC < -0.6 & tab$PValue < 0.05] <- "DOWN"
+
+p <- ggplot(data=tab, aes(x=logFC, y=-log10(PValue), col=diffexpressed)) + geom_point() + theme_minimal()
+p2 <- p + geom_vline(xintercept=c(-0.6, 0.6), col="red") +
+        geom_hline(yintercept=-log10(0.05), col="red")
+p3 <- p2 + scale_color_manual(values=c("blue", "grey", "orange"))
+mycolors <- c("blue", "orange", "purple")
+names(mycolors) <- c("DOWN", "UP", "NO")
+p3 <- p2 + scale_colour_manual(values = mycolors)
+
+ggplot(data=tab, aes(x=logFC, y=-log10(PValue), col=diffexpressed)) +
+        geom_point() + 
+        theme_minimal() +
+        scale_color_manual(values=c("blue", "orange", "green")) +
+        geom_vline(xintercept=c(-0.6, 0.6), col="red") +
+        geom_hline(yintercept=-log10(0.05), col="red")
+```
+
+Figure 1. Volcano plot of up/downregulated description. Genes of interest are highlighted in blue for down regulated and green for upregulated
+
+Visualization using a heatmap.
+
+```{r Heatmap}
+heatmap_matrix <- pval$table
+top_fdr <- rownames(heatmap_matrix$table[heatmap_matrix$table$FDR < 0.05,])
+
+heatmapm_tophits <- t(scale(t(heatmap_matrix[which(rownames(norm_data) %in% top_fdr),])))
+
+if(min(heatmapm_tophits) < 0){colscale <- colorRamp2(c(min(heatmapm_tophits), 
+                                                       0, max(heatmapm_tophits)),
+                                                     c("lavender", "grey", "yellow"))} else {
+                                                       colscale <- colorRamp2(c(min(heatmapm_tophits),
+                                                                                max(heatmapm_tophits)), 
+                                                                              c("lavender", "pink"))
+                                                     }
+
+heat_map <- Heatmap(as.matrix(heatmapm_tophits), col=heatmap_col, 
+              row_names_gp = gpar(fontsize=8), column_names_gp = gpar(fontsize=10), 
+              heatmap_legend_param = list(title="Normalized log2FC"))
+
+heat_map
+```
+
+Figure 2. Heatmap of the up and down regulated expression that undergone multiple hypothesis testing. 
+
+*Do you conditions cluster together? Explain why or why not.*
+Yes, you do cluster conditions together. Since these all are replicates of each other the amount of variation seen between should be very minimal that you should be able to cluster them without affecting the analysis too much. 
+
+**Thresholded Over-representation Analysis**
+
+G:profiler was used to do the over-representation analysis of all differentially expressed genes.
+
+```{r}
+upreg_id <- which(pval$table$FDR < 0.05 & 
+                  pval$table$logFC > 0)
+downreg_id <- which(pval$table$FDR < 0.01 & 
+                    pval$table$logFC < 0)
+
+# names of upregulated genes
+upreg <- pval$table[upreg_id,]
+upreg_list <- rownames(upreg)
+
+# names of downregulated genes
+downreg <- pval$table[downreg_id,]
+downreg_list <- rownames(downreg)
+
+#actual analysis  
+go_all <-  gost(query = c(upreg_list, downreg_list), 
+                organism = "hsapiens",
+                correction_method = "fdr", 
+                domain_scope = "annotated", 
+                numeric_ns = "", sources = c("GO:BP", "REAC", "WP"))
+
+go_all200 <- go_all$result[which(go_all$result$term_size <= 200),]
+
+go_all200
+
+kable(go_all200)
+```
+Table 1. Table of differentially expressed and normalized over-representation analysis using G:Profiler
+
+*What annotation data did you use and why? What version of the annotation are you using?*
+I used the Wikipathways, GO Biological processes, and Reactome. These were the ones that were introduced in the HW set the other day. I wanted to try all of them since they are all slightly different in the way that they have more representative views of either proteins or genes or whether it is curated by experts or if its a collaborative effort within the community. Since these all have their strengths and weaknesses, it would allow us to cross check everything and have a more comprehensive analysis. 
+
+*How many genesets were returned with what thresholds?*
+It was 13233 for GO:BP, 1194 for REAC, and 358 for WP that were returned for a threshold of 200 or less. This value was used since the G:Profiler HW stated that the geneset sizes should be in the range of 5-200. 
+
+G:profiler was used to do the over-representation analysis of all up-regulated genes.
+
+```{r up-regulated genes}
+#actual analysis  
+go_up <-  gost(query = c(upreg_list), 
+                organism = "hsapiens",
+                correction_method = "fdr", 
+                domain_scope = "annotated", 
+                numeric_ns = "", sources = c("GO:BP", "REAC", "WP"))
+
+go_up200 <- go_up$result[which(go_up$result$term_size <= 200),]
+
+go_up200
+
+kable(go_up200)
+```
+
+Table 2. Table of the upregulation over-representation analysis using G:Profiler
+
+G:profiler was used to do the over-representation analysis of all down-regulated genes.
+
+```{r down-regulated genes}
+go_down <-  gost(query = c(upreg_list), 
+                organism = "hsapiens",
+                correction_method = "fdr", 
+                domain_scope = "annotated", 
+                numeric_ns = "", sources = c("GO:BP", "REAC", "WP"))
+
+go_down200 <- go_down$result[which(go_down$result$term_size <= 200),]
+
+go_down200
+
+kable(go_down200)
+```
+
+Table 3. Table of the downregulation over-representation analysis using G:Profiler
+
+*How do these results compare to using the whole list (i.e all differentially expressed genes together vs. the up-regulated and down regulated differentially expressed genes separately)?*
+
+They are all the same and hint towards the same categories. We see that the top five hits are all the same whether we are just looking at the upregulation, downregulation, or all of the combined. 
+
+**Interpretation**
+
+*Do the over-representation results support conclusions or mechanism discussed in the original paper?*
+
+I think that my data also lines up with the data presented in the original paper. Since it shows that they saw differential gene expression for things related to interferons, antiviral responses, and different tissue factors. In my results the top hits were mostly antiviral responses and interferons with a couple of hits relating to blood and lungs. I think that some of the hits were definitely interesting though since it did pop up with measels infection a few times when this cell line was confirmed to be infected with COVID. But we do see direct evidence that Type I interferon signalling is happening which supports the conclusions of the paper that these factors are somehow involved in the clotting. 
+
+*Can you find evidence, i.e. publications, to support some of the results that you see. How does this evidence support your results.*
+
+There are a few papers that directly link type 1 interferon response to coagulation of blood [8][9]. These both talk about how type 1 interferons are mediators of anti-viral and anti-bacterial responses. They discuss how recently it has been found that the dysregulation of these interferons can cause coagulation to occur. Since these patients are COVID positive it does make sense how they have upregulation of the type 1 interferons because of the anti-viral trigger. This newfound information is interesting since it also means that it could play a double role and cause blood clotting of the lungs. The papers then mention how it usually only happens in excessive cases which makes sense since the cases of this happening in COVID are usually the most severe cases where the patients are hospitalized. 
+
+**References** 
+[1] Erickson R, Huang C, Allen C, Ireland J, Roth G, Zou Z, Lu J, Lafont BAP, Garza NL, Brumbaugh B, Zhao M, Suzuki M, Olano L, Brzostowski J, Fischer ER, Twigg HL 3rd, Johnson RF, Sun PD. SARS-CoV-2 infection of human lung epithelial cells induces TMPRSS-mediated acute fibrin deposition. Nat Commun. 2023 Oct 11;14(1):6380. doi: 10.1038/s41467-023-42140-6. PMID: 37821447; PMCID: PMC10567911. 
+[2] https://github.com/bcb420-2024/Tiana_Lee/blob/main/A1_TianaLee.html
+[3] https://biit.cs.ut.ee/gprofiler/gost
+[4] https://www.quantargo.com/help/r/latest/packages/edgeR/3.32.1/DGELRT-class
+[5] https://www.biostars.org/p/209118/
+[6] https://biocorecrg.github.io/CRG_RIntroduction/volcano-plots.html
+[7] Bohler A, Wu G, Kutmon M, Pradhana LA, Coort SL, Hanspers K, Haw R, Pico AR, Evelo CT. Reactome from a WikiPathways Perspective. PLoS Comput Biol. 2016 May 20;12(5):e1004941. doi: 10.1371/journal.pcbi.1004941. PMID: 27203685; PMCID: PMC4874630.
+[8] Yang X, Cheng X, Tang Y, Qiu X, Wang Z, Fu G, Wu J, Kang H, Wang J, Wang H, Chen F, Xiao X, Billiar TR, Lu B. The role of type 1 interferons in coagulation induced by gram-negative bacteria. Blood. 2020 Apr 2;135(14):1087-1100. doi: 10.1182/blood.2019002282. PMID: 32016282; PMCID: PMC7118812.
+[9] Ryan TAJ, O'Neill LAJ. An Emerging Role for Type I Interferons as Critical Regulators of Blood Coagulation. Cells. 2023 Feb 28;12(5):778. doi: 10.3390/cells12050778. PMID: 36899914; PMCID: PMC10001161.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
