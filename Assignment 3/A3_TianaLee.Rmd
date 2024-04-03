@@ -199,4 +199,7 @@ This doesnt necessarily conclude what the paper concluded and looks a bit differ
 
 References 
 [1] https://www.nature.com/articles/s41579-020-00468-6
-[2] 
+[2] https://download.baderlab.org/EM_Genesets/March_01_2024/Human/symbol/Human_GOBP_AllPathways_noPFOCR_no_GO_iea_March_01_2024_symbol.gmt
+[3] https://cytoscape.org/
+[4] https://baderlab.github.io/CBW_Pathways_2023/cytoscape_mod3.html
+[5] https://www.gsea-msigdb.org/gsea/index.jsp
